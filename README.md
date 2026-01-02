@@ -2,6 +2,20 @@
 
 A production-grade lottery prediction system using multi-factor weighted scoring algorithms to analyze Thai Government Lottery patterns.
 
+## 🚀 Quick Start
+
+### Web Interface (Streamlit)
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+### Command Line Interface
+```bash
+cd src
+python thai_lotto_predictor.py
+```
+
 ## Features
 
 - **Real-time Data Sync**: Automatically fetches latest draw results from GLO API
@@ -14,6 +28,7 @@ A production-grade lottery prediction system using multi-factor weighted scoring
 
 ```
 Lottery_Prediction/
+├── app.py                         # Streamlit web interface
 ├── src/
 │   ├── thai_lotto_predictor.py    # Main prediction engine
 │   └── legacy_predictor.py        # Original implementation (reference)

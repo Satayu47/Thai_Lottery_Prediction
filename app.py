@@ -1,94 +1,76 @@
 import streamlit as st
 import requests
 import pandas as pd
-import json
-import os
 from datetime import datetime
-from collections import Counter, defaultdict
-from typing import List, Dict, Tuple
+from collections import Counter
 
 # --- CONFIGURATION ---
-API_ENDPOINT = "https://lotto.api.rayriffy.com/latest"
-DB_FILE = os.path.join("data", "thai_lotto_stat_db.json")
-CACHE_TTL = 3600  # Cache API results for 1 hour to prevent spamming
-THEME_COLOR = "#FF4B4B"
+API_BASE = "https://lotto.api.rayriffy.com/lotto"
+API_LATEST = "https://lotto.api.rayriffy.com/latest"
 
 st.set_page_config(
-    page_title="Satayu Intersection Engine",
+    page_title="Satayu Ultimate Engine",
     page_icon="🧬",
-    layout="centered",
-    initial_sidebar_state="collapsed"
+    layout="centered"
 )
 
-# Inject custom CSS for a cleaner, "App-like" feel
-st.markdown(f"""
-    <style>
-    .stApp {{ background-color: #FAFAFA; }}
-    .main-title {{ font-size: 2.2rem; font-weight: 800; color: #333; margin-bottom: 0; }}
-    .subtitle {{ font-size: 1rem; color: #666; margin-bottom: 2rem; }}
-    .metric-box {{
-        background: white; border: 1px solid #e0e0e0; 
-        border-radius: 8px; padding: 15px; text-align: center;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }}
-    .prediction-card {{
-        background: linear-gradient(135deg, #FF4B4B 0%, #FF9068 100%);
-        color: white; padding: 20px; border-radius: 12px;
-        text-align: center; margin-top: 20px;
-        box-shadow: 0 4px 15px rgba(255, 75, 75, 0.3);
-    }}
-    </style>
-""", unsafe_allow_html=True)
-
-class LottoAnalyzer:
-    """
-    Production-grade prediction engine integrating the advanced CLI algorithm
-    with web interface capabilities. Uses persistent database and multi-factor scoring.
-    """
+# --- ENGINE: REAL-TIME MINER ---
+def get_target_date():
+    """Auto-detects the next draw date based on today."""
+    now = datetime.now()
     
-    def __init__(self):
-        # Weight configurations matching the advanced CLI engine
-        self.weights = {
-            'CULTURE': 5,      # Cultural/Event patterns
-            'SEASONAL': 3,     # Historical same-month patterns
-            'RECENT': 1,       # Last 20 draws trend
-            'PENALTY': -5      # Anti-repeat logic
-        }
-        self.history = self._load_history()
-        self.api_failures = 0
+    # Logic: ถ้าวันนี้ยังไม่ถึงวันที่ 16 ให้เล็งเป้าไปที่งวดกลางเดือน
+    if now.day <= 16:
+        day = 17 if now.month == 1 else 16  # ถ้าเดือน 1 เป็นวันที่ 17 (วันครู)
+        return datetime(now.year, now.month, day)
+    else:
+        # ถ้าเลยวันที่ 16 แล้ว ให้เล็งเป้าไปที่งวดต้นเดือนหน้า
+        m = now.month + 1 if now.month < 12 else 1
+        y = now.year + 1 if now.month == 12 else now.year
+        return datetime(y, m, 1)
 
-    def _load_history(self) -> List[Dict]:
-        """Load historical data from persistent database."""
-        if os.path.exists(DB_FILE):
-            try:
-                with open(DB_FILE, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, IOError):
-                pass
+def mine_historical_data(target_month, target_day):
+    """
+    MINING: เชื่อมต่อ API ดึงผลย้อนหลัง 10 ปี ของวันที่เป้าหมาย (เช่น 17 ม.ค.)
+    """
+    history = []
+    current_year = datetime.now().year
+    
+    # Progress Bar UI
+    progress_text = f"📡 Mining Data: เจาะเวลาหาผล {target_day}/{target_month} ย้อนหลัง 10 ปี..."
+    my_bar = st.progress(0, text=progress_text)
+    
+    years_range = range(current_year - 10, current_year)
+    total_steps = len(years_range)
+    
+    for i, year in enumerate(years_range):
+        # Update UI
+        my_bar.progress(int((i / total_steps) * 100))
         
-        # Seed data if no database exists
-        seed = [
-            {"date": "02-01-2026", "number": "16"},
-            {"date": "30-12-2025", "number": "59"},
-            {"date": "16-12-2025", "number": "52"},
-            {"date": "01-12-2025", "number": "22"},
-            {"date": "16-11-2025", "number": "38"},
-            {"date": "01-11-2025", "number": "87"},
-            {"date": "17-01-2025", "number": "61"},
-            {"date": "17-01-2024", "number": "47"},
-            {"date": "17-01-2023", "number": "92"},
-            {"date": "17-01-2022", "number": "15"},
-            {"date": "17-01-2021", "number": "68"},
-        ]
-        
+        # ยิง Request ไปที่ API
+        url = f"{API_BASE}/{year}-{target_month:02d}-{target_day:02d}"
         try:
-            os.makedirs("data", exist_ok=True)
-            with open(DB_FILE, 'w', encoding='utf-8') as f:
-                json.dump(seed, f, indent=2)
-        except IOError:
-            pass
+            r = requests.get(url, timeout=2)
+            if r.status_code == 200:
+                data = r.json()
+                if 'response' in data and 'runningNumbers' in data['response']:
+                    # ดึงเลขท้าย 2 ตัว
+                    num = data['response']['runningNumbers'][0]['number'][0]
+                    history.append({"Year": year, "Number": num})
+        except:
+            continue  # ถ้าปีไหนไม่มีข้อมูล (เช่น หวยงด) ให้ข้าม
             
-        return seed
+    my_bar.empty()
+    return history
+
+def get_latest_draw_penalty():
+    """ดึงเลขที่เพิ่งออกล่าสุด (เพื่อเอามาทำ Penalty)"""
+    try:
+        r = requests.get(API_LATEST, timeout=2)
+        data = r.json()
+        return data['response']['runningNumbers'][0]['number'][0]
+    except:
+        return None
 
     @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
     def fetch_latest_draw(_self):
@@ -224,95 +206,106 @@ class LottoAnalyzer:
         return results
 
 # --- UI IMPLEMENTATION ---
-def main():
-    analyzer = LottoAnalyzer()
+
+st.title("🧬 Satayu Ultimate Engine")
+st.caption("Real-Time Data Mining + Thai Cultural Logic Intersection")
+
+# แสดงเป้าหมาย (Target)
+target = get_target_date()
+st.info(f"🎯 Target Draw Detected: **{target.strftime('%d %B %Y')}** (ระบบตรวจจับอัตโนมัติ)")
+
+if st.button("🚀 Run Live Analysis", type="primary"):
     
-    # Header
-    st.markdown('<div class="main-title">🔮 Satayu Intersection Engine</div>', unsafe_allow_html=True)
-    st.markdown('<div class="subtitle">Statistical & Cultural Bias Integration Model</div>', unsafe_allow_html=True)
-
-    # Status Bar
-    latest_data = analyzer.fetch_latest_draw()
+    # --- STEP 1: MINING (ขุดข้อมูลจริง) ---
+    with st.spinner("⏳ กำลังดึงข้อมูลจาก Server กองสลากฯ..."):
+        raw_history = mine_historical_data(target.month, target.day)
+        penalty_num = get_latest_draw_penalty()
     
-    c1, c2, c3 = st.columns([2, 2, 1])
-    with c1:
-        st.markdown(f'<div class="metric-box">📅 <b>Latest Draw</b><br>{latest_data["date"]}</div>', unsafe_allow_html=True)
-    with c2:
-        st.markdown(f'<div class="metric-box">🏆 <b>Result (2-Tail)</b><br><span style="color:{THEME_COLOR}; font-weight:bold; font-size:1.2em">{latest_data["number"]}</span></div>', unsafe_allow_html=True)
-    with c3:
-        status_color = "green" if latest_data["status"] == "Online" else "red"
-        st.markdown(f'<div class="metric-box" style="border-left: 5px solid {status_color}">📡<br>{latest_data["status"]}</div>', unsafe_allow_html=True)
+    if not raw_history:
+        st.error("❌ ไม่พบข้อมูล (Check Internet Connection)")
+        st.stop()
 
-    st.write("---")
+    # แสดงหลักฐานข้อมูลดิบ (Evidence)
+    st.subheader("1. Hard Evidence (สถิติของจริงที่ดึงมา)")
+    df = pd.DataFrame(raw_history)
+    st.dataframe(df.set_index("Year").T, use_container_width=True)
 
-    # Control Panel
-    with st.container():
-        col_btn, col_opts = st.columns([1, 2])
+    # --- STEP 2: LOGIC PROCESSING ---
+    
+    # A. วิเคราะห์สถิติ (Statistical Analysis)
+    numbers = [x['Number'] for x in raw_history]
+    all_digits = "".join(numbers)
+    # หา "เลขวิ่ง" ที่มาบ่อยที่สุดในประวัติศาสตร์วันนี้
+    top_digit = Counter(all_digits).most_common(1)[0][0]
+    
+    # B. วิเคราะห์บริบท (Cultural Bias)
+    bias_set = set()
+    # 1. เลขวันที่
+    bias_set.add(f"{target.day:02d}")       
+    bias_set.add(f"{target.day-1:02d}")     
+    # 2. เลขปี (พ.ศ./ค.ศ.)
+    bias_set.add(str(target.year)[-2:])     # 26
+    bias_set.add(str(target.year+543)[-2:]) # 69
+    # 3. เลข Event (เฉพาะวันครู)
+    if target.month == 1 and target.day == 17:
+        bias_set.update(["61", "95", "19", "79"])
+
+    # --- STEP 3: INTERSECTION SCORING ---
+    scores = {}
+    reasons = {}
+
+    # Logic 1: ให้คะแนนเลขตามบริบท (+5)
+    for n in bias_set:
+        scores[n] = scores.get(n, 0) + 5
+        reasons[n] = ["Cultural Bias"]
+
+    # Logic 2: ให้คะแนนถ้าเลขมีส่วนประกอบของ "เลขวิ่ง" สถิติ (+3)
+    # (เช่น ถ้าสถิติบอกว่าเลข 9 มาบ่อย เลข 97, 19 จะได้คะแนนเพิ่ม)
+    for n in scores:
+        if top_digit in n:
+            scores[n] += 3
+            reasons[n].append(f"Stat Match '{top_digit}'")
+
+    # Logic 3: ให้คะแนนถ้าเลขเคยออกจริงในประวัติศาสตร์ (+5)
+    for hist in raw_history:
+        n = hist['Number']
+        scores[n] = scores.get(n, 0) + 5
+        if n not in reasons: reasons[n] = []
+        reasons[n].append("History Repeat")
+
+    # Logic 4: PENALTY (-20) **สำคัญมาก**
+    # หักคะแนนเลขที่เพิ่งออกล่าสุด (เพราะโอกาสออกซ้ำยาก)
+    if penalty_num and penalty_num in scores:
+        scores[penalty_num] -= 20
+        reasons[penalty_num].append("⛔ Penalty (Recent)")
+
+    # --- STEP 4: RESULT DISPLAY ---
+    st.subheader("2. Final Optimized Prediction")
+    
+    # จัดอันดับ
+    top_picks = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:5]
+    
+    # Winner Card
+    winner = top_picks[0]
+    st.markdown(f"""
+    <div style="background:linear-gradient(45deg, #FF4B4B, #FF9068); padding:20px; border-radius:15px; text-align:center; color:white; margin-bottom:20px; box-shadow: 0 4px 15px rgba(255, 75, 75, 0.4);">
+        <div style="font-size:1rem; opacity:0.9;">✨ Best Intersection Match</div>
+        <div style="font-size:4rem; font-weight:800; letter-spacing: 2px;">{winner[0]}</div>
+        <div style="background:rgba(255,255,255,0.2); display:inline-block; padding:5px 15px; border-radius:20px; margin-top:5px;">
+            Confidence Score: {winner[1]}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Detail Table
+    table_data = []
+    for num, score in top_picks:
+        table_data.append({
+            "Number": num,
+            "Score": score,
+            "Logic Sources": ", ".join(reasons.get(num, []))
+        })
         
-        with col_opts:
-            dev_mode = st.toggle("Developer Mode (Show Logic)", value=False)
-            
-        with col_btn:
-            run_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
-
-    if run_btn:
-        with st.spinner("Calculating Intersection Matrix..."):
-            # 1. Get next draw context
-            target_date, cultural_bias = analyzer.get_next_draw_context()
-            
-            # 2. Run advanced algorithm
-            top_picks = analyzer.run_advanced_algorithm(target_date, cultural_bias)
-            winner = top_picks[0]
-
-            # 3. Display Winner
-            st.markdown(f"""
-                <div class="prediction-card">
-                    <div style="font-size: 1.2rem; opacity: 0.9;">✨ Highest Probability Target</div>
-                    <div style="font-size: 4.5rem; font-weight: 800; line-height: 1.2;">{winner[0]}</div>
-                    <div style="font-size: 0.9rem; background: rgba(0,0,0,0.2); display: inline-block; padding: 5px 15px; border-radius: 20px;">
-                        Confidence Score: {winner[1]} | {target_date.strftime('%d-%m-%Y')}
-                    </div>
-                </div>
-            """, unsafe_allow_html=True)
-
-            # 4. Display Table
-            st.markdown("### 📊 Top 5 Candidates (Evidence-Based)")
-            
-            # Create detailed DataFrame
-            df_display = pd.DataFrame([
-                {
-                    "Rank": f"#{i+1}",
-                    "Number": num,
-                    "Score": score,
-                    "Evidence": ", ".join(reasons)
-                }
-                for i, (num, score, reasons) in enumerate(top_picks)
-            ])
-            
-            st.dataframe(
-                df_display,
-                column_config={
-                    "Score": st.column_config.ProgressColumn(
-                        "Algorithmic Score",
-                        format="%d",
-                        min_value=min(x[1] for x in top_picks) if top_picks else 0,
-                        max_value=max(x[1] for x in top_picks) if top_picks else 10,
-                    ),
-                },
-                use_container_width=True,
-                hide_index=True
-            )
-
-            # 5. Dev Mode (Human Touch)
-            if dev_mode:
-                st.info(f"""👨‍💻 **Debug Info:**
-- Target Draw: {target_date.strftime('%d %B %Y')}
-- Penalized Number: {latest_data['number']}
-- Cultural Bias Set: {cultural_bias}
-- Historical Records: {len(analyzer.history)} draws
-- Algorithm: Multi-Factor v2.0 (CLI Engine)
-- Weights: Culture={analyzer.weights['CULTURE']}, Seasonal={analyzer.weights['SEASONAL']}, Recent={analyzer.weights['RECENT']}
-                """)
-
-if __name__ == "__main__":
-    main()
+    st.table(pd.DataFrame(table_data))
+    
+    st.success(f"💡 **Insight:** สถิติบ่งชี้ว่าเลข **{top_digit}** ปรากฏบ่อยที่สุดในงวด {target.day}/{target.month} ย้อนหลัง 10 ปี ระบบจึงให้น้ำหนักกับเลขชุดที่มี {top_digit} ผสมอยู่")
